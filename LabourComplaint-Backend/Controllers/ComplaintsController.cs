@@ -128,16 +128,15 @@ public class ComplaintsController : ControllerBase
     /// <response code="401">Not authenticated</response>
     /// <response code="403">Forbidden</response>
     [HttpGet]
-    // Fixed: Return type matches actual response (anonymous object)
     [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    public async Task<ActionResult> ListComplaints(  // Changed to ActionResult (no generic)
-        [FromQuery] int? districtId,
-        [FromQuery] string? status,
-        [FromQuery] int page = 1,
-        [FromQuery] int limit = 20,
-        CancellationToken ct = default)
+    public async Task<ActionResult> ListComplaints(
+    [FromQuery] int? districtId,
+    [FromQuery] string? status,
+    [FromQuery] int page = 1,
+    [FromQuery] int limit = 20,
+    CancellationToken ct = default)
     {
         var userIdClaim = User.FindFirst("sub");
         var userRole = User.FindFirst("role")?.Value;
@@ -148,22 +147,25 @@ public class ComplaintsController : ControllerBase
             reporterId = uid;
         }
 
-        // Note: ListComplaintsAsync should return Result<IEnumerable<ComplaintSummaryDto>>
         var result = await _service.ListComplaintsAsync(districtId, reporterId, status, page, limit, ct);
-
-        // Fixed: Explicit generic type + correct variable names in scope
+        
         return result.Match<ActionResult>(
-            onSuccess: complaints =>  // Renamed 'responses' to 'complaints' for clarity
-            {
-                var pagination = new
-                {
-                    Page = page,      // Now in scope (method parameter)
-                    Limit = limit,    // Now in scope
-                    Total = complaints.Count()  // complaints is IEnumerable, use Count()
-                };
-                return Ok(new { data = complaints, pagination });
-            },
-            onFailure: error => Problem(detail: error)
-        );
+    onSuccess: paginated => // paginated is PaginatedResult<ComplaintSummaryDto>
+    {
+        var pagination = new PaginationMetadata
+        {
+            Page = paginated.Page,
+            Limit = paginated.Limit,
+            Total = paginated.Total // Now you have the real total!
+        };
+
+        return Ok(new ListComplaintsResponseDto
+        {
+            Data = paginated.Items, // Type matches: IEnumerable<ComplaintSummaryDto>
+            Pagination = pagination
+        });
+    },
+    onFailure: error => Problem(detail: error)
+);
     }
 }

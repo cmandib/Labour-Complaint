@@ -126,42 +126,48 @@ public class ComplaintService : IComplaintService
         return Result<ComplaintResponseDto>.Success(response);
     }
 
-    public async Task<Result<List<ComplaintResponseDto>>> ListComplaintsAsync(
-        int? districtId, int? reporterId, string? status,
-        int page = 1, int limit = 20, CancellationToken ct = default)
+    public async Task<Result<PaginatedResult<ComplaintSummaryDto>>> ListComplaintsAsync(
+    int? districtId, int? reporterId, string? status,
+    int page = 1, int limit = 20, CancellationToken ct = default)
     {
         var query = _db.Complaints
-            .Include(c => c.Reporter)
-            .Include(c => c.District)
-            .Include(c => c.Evidence)
+            .AsNoTracking()
             .Where(c => !c.IsDeleted);
 
-        // Apply filters
         if (districtId.HasValue)
             query = query.Where(c => c.DistrictId == districtId.Value);
-
         if (reporterId.HasValue)
             query = query.Where(c => c.ReporterId == reporterId.Value);
-
-        if (!string.IsNullOrWhiteSpace(status) && Enum.TryParse<ComplaintStatus>(status, true, out var parsedStatus))
+        if (!string.IsNullOrWhiteSpace(status) &&
+            Enum.TryParse<ComplaintStatus>(status, true, out var parsedStatus))
+        {
             query = query.Where(c => c.Status == parsedStatus);
+        }
 
-        // Pagination
-        var complaints = await query
+        // Get total count BEFORE pagination
+        var totalCount = await query.CountAsync(ct);
+
+        var summaries = await query
             .OrderByDescending(c => c.CreatedAt)
+            .Select(c => new ComplaintSummaryDto
+            {
+                ReferenceNumber = c.ReferenceNumber,
+                Category = c.Category,
+                SubCategory = c.SubCategory,
+                Status = c.Status.ToString(),
+                Severity = c.Severity.ToString(),
+                CreatedAt = c.CreatedAt,
+                WorkplaceName = c.WorkplaceName,
+                DistrictId = c.DistrictId
+            })
             .Skip((page - 1) * limit)
             .Take(limit)
             .ToListAsync(ct);
 
-        var responses = new List<ComplaintResponseDto>();
-        foreach (var c in complaints)
-        {
-            responses.Add(await BuildComplaintResponseDto(c, ct));
-        }
-
-        return Result<List<ComplaintResponseDto>>.Success(responses);
+        // Return wrapped result with pagination metadata
+        var paginated = new PaginatedResult<ComplaintSummaryDto>(summaries, totalCount, page, limit);
+        return Result<PaginatedResult<ComplaintSummaryDto>>.Success(paginated);
     }
-
     // Helper: Build response DTO from entity
     private async Task<ComplaintResponseDto> BuildComplaintResponseDto(Complaint c, CancellationToken ct)
     {

@@ -11,7 +11,7 @@ public interface IComplaintService
     Task<Result<ComplaintResponseDto>> GetComplaintByReferenceAsync(
         string referenceNumber, int requestingUserId, CancellationToken ct);
 
-    Task<Result<List<ComplaintResponseDto>>> ListComplaintsAsync(
+    Task<Result<PaginatedResult<ComplaintSummaryDto>>> ListComplaintsAsync(
         int? districtId, int? reporterId, string? status,
         int page = 1, int limit = 20, CancellationToken ct = default);
 }
