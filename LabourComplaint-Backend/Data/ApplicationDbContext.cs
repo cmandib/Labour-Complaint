@@ -1,4 +1,5 @@
 ﻿// Data/ApplicationDbContext.cs
+using LabourComplaint_Backend.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.Extensions.Configuration;
@@ -86,7 +87,12 @@ public class ApplicationDbContext : DbContext
         modelBuilder.Entity<Notification>().HasQueryFilter(n => !n.IsDeleted);
         modelBuilder.Entity<ComplaintStatusHistory>().HasQueryFilter(h => !h.IsDeleted);
         modelBuilder.Entity<UserDevice>().HasQueryFilter(d => !d.IsDeleted);
-        modelBuilder.Entity<OutboxMessage>().HasQueryFilter(o => !o.IsDeleted);
+        modelBuilder.Entity<OutboxMessage>(entity =>
+        {
+            entity.HasIndex(o => new { o.ProcessedAt, o.RetryCount });
+            entity.HasIndex(o => new { o.DistrictId, o.EventType }); // Index for district filtering
+            entity.Property(o => o.EventType).HasMaxLength(100);
+        });
 
         // === RELATIONSHIPS (Normalized FKs, Restrict cascades to prevent cycles) ===
         modelBuilder.Entity<Complaint>()
