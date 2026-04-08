@@ -1,5 +1,7 @@
 ﻿using LabourComplaint_Backend.Data;
 using LabourComplaint_Backend.Features.Complaints.Dtos;
+using LabourComplaint_Backend.Features.Notifications.Dtos; // Ensure this namespace contains NotificationCreateRequest
+using LabourComplaint_Backend.Features.Notifications.Services;
 using LabourComplaint_Backend.Models;
 using LabourComplaint_Backend.Models.Enums;
 using LabourComplaint_Backend.Shared.Helpers;
@@ -11,10 +13,12 @@ namespace LabourComplaint_Backend.Features.Complaints.Services;
 public class ComplaintService : IComplaintService
 {
     private readonly ApplicationDbContext _db;
+    private readonly INotificationService _notificationService;
 
-    public ComplaintService(ApplicationDbContext db)
+    public ComplaintService(ApplicationDbContext db, INotificationService notificationService)
     {
         _db = db;
+        _notificationService = notificationService;
     }
 
     public async Task<Result<ComplaintResponseDto>> CreateComplaintAsync(
@@ -177,7 +181,7 @@ public class ComplaintService : IComplaintService
     }
 
     public async Task<Result<AssignResponseDto>> AssignInspectorAsync(
-    string referenceNumber, int assigningUserId, AssignInspectorDto dto, CancellationToken ct)
+        string referenceNumber, int assigningUserId, AssignInspectorDto dto, CancellationToken ct)
     {
         // 1. Find complaint
         var complaint = await _db.Complaints
@@ -205,6 +209,7 @@ public class ComplaintService : IComplaintService
 
         // 4. Wrap in transaction for atomicity
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        string correlationId = Guid.NewGuid().ToString("N");
 
         try
         {
@@ -240,7 +245,7 @@ public class ComplaintService : IComplaintService
             });
 
             // Queue outbox event
-            _db.OutboxMessages.Add(new OutboxMessage
+            var outboxMessage = new OutboxMessage
             {
                 EventType = "ComplaintAssigned",
                 PayloadJson = System.Text.Json.JsonSerializer.Serialize(new
@@ -253,11 +258,38 @@ public class ComplaintService : IComplaintService
                     DistrictId = complaint.DistrictId
                 }),
                 DistrictId = complaint.DistrictId,
-                CreatedAt = DateTime.UtcNow
-            });
+                CreatedAt = DateTime.UtcNow,
+                CorrelationId = correlationId // Link to notification
+            };
+            _db.OutboxMessages.Add(outboxMessage);
 
             await _db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
+
+            // Notify inspector
+            await _notificationService.CreateAsync(new NotificationCreateRequest
+            {
+                RecipientId = inspector.Id,
+                Type = NotificationType.ComplaintAssigned,
+                Title = "New Complaint Assigned",
+                Body = $"You have been assigned complaint {complaint.ReferenceNumber} ({complaint.Category}) in {complaint.District?.Name}.",
+                Channel = NotificationChannel.InApp,
+                Priority = complaint.Severity >= PriorityLevel.High ? PriorityLevel.High : PriorityLevel.Normal,
+                ComplaintId = complaint.Id,
+                TriggeredByUserId = assigningUserId,
+                ActionUrl = $"/complaints/{complaint.ReferenceNumber}",
+                Payload = new
+                {
+                    ComplaintReference = complaint.ReferenceNumber,
+                    Category = complaint.Category,
+                    DistrictId = complaint.DistrictId,
+                    Severity = complaint.Severity.ToString(),
+                    ResponseDueBy = complaint.ResponseDueBy
+                },
+                // 🔑 Either omit CorrelationId or use a new GUID:
+                CorrelationId = Guid.NewGuid().ToString("N"), // Independent tracing ID
+                IsSystemGenerated = true
+            }, ct);
 
             return Result<AssignResponseDto>.Success(new AssignResponseDto
             {
@@ -331,7 +363,7 @@ public class ComplaintService : IComplaintService
         return mimeType switch
         {
             var m when m.StartsWith("image/") => EvidenceType.Photo,
-            var m when m.StartsWith("video/") => EvidenceType.Video,
+            var m when m.StartsWith("video/") => EvidenceType.Video, // 🔑 Fixed typo here
             var m when m.StartsWith("audio/") => EvidenceType.Audio,
             var m when m is "application/pdf" or "application/msword" or "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => EvidenceType.Document,
             _ => EvidenceType.Link

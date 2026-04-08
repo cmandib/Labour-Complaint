@@ -19,4 +19,5 @@ public class OutboxMessage : BaseEntity  // BaseEntity already has Id, CreatedAt
     public DateTime? ProcessedAt { get; set; }
     public int RetryCount { get; set; }
     [StringLength(500)] public string? ErrorDetails { get; set; }
+    [StringLength(100)] public string? CorrelationId { get; set; }
 }

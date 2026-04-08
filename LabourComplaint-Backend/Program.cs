@@ -6,6 +6,7 @@ using LabourComplaint_Backend.Features.Auth.Validators;
 using LabourComplaint_Backend.Features.Chat.Services;
 using LabourComplaint_Backend.Features.Complaints.Services;
 using LabourComplaint_Backend.Features.Complaints.Validators;
+using LabourComplaint_Backend.Features.Notifications.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer; //   Added explicit namespace
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens; //   Added for SymmetricSecurityKey
@@ -27,6 +28,7 @@ builder.Services.AddValidatorsFromAssemblyContaining<RegisterDtoValidator>(); //
 builder.Services.AddScoped<IComplaintService, ComplaintService>();
 builder.Services.AddScoped<IAuthService, AuthService>(); //   Added Auth service
 builder.Services.AddScoped<IChatService, ChatService>();
+builder.Services.AddScoped<INotificationService, NotificationService>();
 
 //   JWT Authentication (your existing config - kept as-is)
 // Program.cs - Update the AddJwtBearer block:

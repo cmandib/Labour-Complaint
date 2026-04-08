@@ -1,6 +1,7 @@
-﻿// Features/Chat/Services/ChatService.cs
-using LabourComplaint_Backend.Data;
+﻿using LabourComplaint_Backend.Data;
 using LabourComplaint_Backend.Features.Chat.Dtos;
+using LabourComplaint_Backend.Features.Notifications.Dtos; // Ensure this namespace contains NotificationCreateRequest
+using LabourComplaint_Backend.Features.Notifications.Services;
 using LabourComplaint_Backend.Models;
 using LabourComplaint_Backend.Models.Enums;
 using LabourComplaint_Backend.Shared.Results;
@@ -11,17 +12,21 @@ namespace LabourComplaint_Backend.Features.Chat.Services;
 public class ChatService : IChatService
 {
     private readonly ApplicationDbContext _db;
+    private readonly INotificationService _notificationService;
 
-    public ChatService(ApplicationDbContext db) => _db = db;
+    public ChatService(ApplicationDbContext db, INotificationService notificationService)
+    {
+        _db = db;
+        _notificationService = notificationService;
+    }
 
     public async Task<Result<IEnumerable<ChatMessageDto>>> GetMessagesAsync(
-    int chatRoomId,
-    int requestingUserId,
-    int page = 1,
-    int limit = 50,
-    CancellationToken ct = default)
+        int chatRoomId,
+        int requestingUserId,
+        int page = 1,
+        int limit = 50,
+        CancellationToken ct = default)
     {
-        // 1. Fetch chat room to determine participants and verify access
         var chatRoom = await _db.ChatRooms
             .FirstOrDefaultAsync(cr => cr.Id == chatRoomId && !cr.IsDeleted, ct);
 
@@ -31,15 +36,11 @@ public class ChatService : IChatService
             return Result<IEnumerable<ChatMessageDto>>.Failure("Access denied to this chat room");
         }
 
-        // 2. Determine the OTHER participant's ID
         var otherUserId = requestingUserId == chatRoom.CitizenId
             ? chatRoom.InspectorId
             : chatRoom.CitizenId;
 
-        // 3. Auto-mark unread messages FROM the other participant AS READ
-        // This happens regardless of pagination - opening the chat = reading the conversation
-
-        // EF Core 7+ approach (efficient bulk update without tracking):
+        // Mark messages as read efficiently
         await _db.Messages
             .Where(m => m.ChatRoomId == chatRoomId
                      && m.SenderId == otherUserId
@@ -49,29 +50,8 @@ public class ChatService : IChatService
                 .SetProperty(m => m.IsRead, true)
                 .SetProperty(m => m.ReadAt, DateTime.UtcNow), ct);
 
-        // EF Core 6 or earlier alternative (load into memory, then save):
-        /*
-        var unread = await _db.Messages
-            .Where(m => m.ChatRoomId == chatRoomId 
-                     && m.SenderId == otherUserId 
-                     && !m.IsRead 
-                     && !m.IsDeleted)
-            .ToListAsync(ct);
-
-        if (unread.Any())
-        {
-            foreach (var msg in unread)
-            {
-                msg.IsRead = true;
-                msg.ReadAt = DateTime.UtcNow;
-            }
-            await _db.SaveChangesAsync(ct);
-        }
-        */
-
-        // 4. Fetch messages for display (pagination + projection to DTO)
         var messages = await _db.Messages
-            .AsNoTracking() // Read-only query: no change tracking overhead
+            .AsNoTracking()
             .Where(m => m.ChatRoomId == chatRoomId && !m.IsDeleted)
             .OrderByDescending(m => m.CreatedAt)
             .Skip((page - 1) * limit)
@@ -80,16 +60,15 @@ public class ChatService : IChatService
             {
                 Id = m.Id,
                 SenderId = m.SenderId,
-                SenderName = m.Sender.Username, // Ensure navigation property is configured
+                SenderName = m.Sender.Username,
                 Content = m.Content,
                 Direction = m.Direction.ToString(),
                 FileUrl = m.FileUrl,
-                IsRead = m.IsRead, // Will reflect the updated read status
+                IsRead = m.IsRead,
                 SentAt = m.CreatedAt
             })
             .ToListAsync(ct);
 
-        // 5. Return chronologically ordered (oldest to newest) for UI display
         return Result<IEnumerable<ChatMessageDto>>.Success(
             messages.OrderBy(m => m.SentAt)
         );
@@ -101,13 +80,13 @@ public class ChatService : IChatService
         var chatRoom = await _db.ChatRooms
             .Include(cr => cr.Citizen)
             .Include(cr => cr.Inspector)
+            .Include(cr => cr.Complaint) // Include Complaint to access ReferenceNumber
             .FirstOrDefaultAsync(cr => cr.Id == chatRoomId && !cr.IsDeleted, ct);
 
         if (chatRoom is null) return Result<ChatMessageDto>.Failure("Chat room not found");
         if (chatRoom.CitizenId != senderId && chatRoom.InspectorId != senderId)
             return Result<ChatMessageDto>.Failure("You are not a participant in this chat");
 
-        // 🔑 Fixed: Compare enum directly (not string)
         if (chatRoom.Status != ChatRoomStatus.Open)
             return Result<ChatMessageDto>.Failure("Cannot send messages to a closed/archived chat");
 
@@ -136,7 +115,6 @@ public class ChatService : IChatService
             _db.Messages.Add(message);
             await _db.SaveChangesAsync(ct);
 
-            // 🔑 Update preview & timestamp (properties now exist)
             chatRoom.LastMessagePreview = message.Content.Length > 100
                 ? message.Content[..100] + "..."
                 : message.Content;
@@ -144,6 +122,45 @@ public class ChatService : IChatService
 
             await _db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
+
+            // Prepare Notification Data
+            var recipientId = senderId == chatRoom.CitizenId ? chatRoom.InspectorId : chatRoom.CitizenId;
+            var senderName = senderId == chatRoom.CitizenId ? chatRoom.Citizen.Username : chatRoom.Inspector.Username;
+            var preview = dto.Content.Length > 100 ? dto.Content[..100] + "..." : dto.Content;
+
+            // Create Notification using the new structure
+            await _notificationService.CreateAsync(new NotificationCreateRequest
+            {
+                RecipientId = recipientId,
+                Type = NotificationType.NewMessage,
+                Title = $"New message from {senderName}",
+                Body = preview,
+
+                Channel = NotificationChannel.InApp,
+                Priority = PriorityLevel.Normal,
+
+                // Context
+                ComplaintId = chatRoom.ComplaintId,
+                ChatRoomId = chatRoom.Id,
+                MessageId = message.Id, // The message we just created
+                TriggeredByUserId = senderId,
+
+                // Action
+                ActionUrl = $"/chat/{chatRoom.Id}",
+
+                // Payload
+                Payload = new
+                {
+                    MessageId = message.Id,
+                    ChatRoomId = chatRoom.Id,
+                    ComplaintReference = chatRoom.Complaint?.ReferenceNumber, // Safe navigation in case Complaint wasn't loaded fully or is null
+                    SenderId = senderId,
+                    HasAttachment = !string.IsNullOrEmpty(dto.FileUrl)
+                },
+
+                IsSystemGenerated = false, // User-triggered
+                CorrelationId = Guid.NewGuid().ToString("N")
+            }, ct);
         }
         catch
         {
@@ -151,7 +168,7 @@ public class ChatService : IChatService
             throw;
         }
 
-        var senderName = senderId == chatRoom.CitizenId
+        var finalSenderName = senderId == chatRoom.CitizenId
             ? chatRoom.Citizen.Username
             : chatRoom.Inspector.Username;
 
@@ -159,7 +176,7 @@ public class ChatService : IChatService
         {
             Id = message.Id,
             SenderId = message.SenderId,
-            SenderName = senderName,
+            SenderName = finalSenderName,
             Content = message.Content,
             Direction = message.Direction.ToString(),
             FileUrl = message.FileUrl,
@@ -167,10 +184,10 @@ public class ChatService : IChatService
             SentAt = message.CreatedAt
         });
     }
+
     public async Task<Result<int>> MarkMessagesReadAsync(
-    int chatRoomId, int userId, CancellationToken ct)
+        int chatRoomId, int userId, CancellationToken ct)
     {
-        // Verify access to chat room
         var chatRoom = await _db.ChatRooms
             .FirstOrDefaultAsync(cr => cr.Id == chatRoomId && !cr.IsDeleted, ct);
 
@@ -180,29 +197,20 @@ public class ChatService : IChatService
         if (chatRoom.CitizenId != userId && chatRoom.InspectorId != userId)
             return Result<int>.Failure("Access denied");
 
-        // Mark unread messages FROM THE OTHER PARTICIPANT as read
-        // (You don't mark your own messages as read)
         var otherUserId = userId == chatRoom.CitizenId
             ? chatRoom.InspectorId
             : chatRoom.CitizenId;
 
-        var unreadMessages = await _db.Messages
+        // Use ExecuteUpdate for better performance than fetching entities into memory
+        var affectedRows = await _db.Messages
             .Where(m => m.ChatRoomId == chatRoomId
-                     && m.SenderId == otherUserId  // Messages from the other person
+                     && m.SenderId == otherUserId
                      && !m.IsRead
                      && !m.IsDeleted)
-            .ToListAsync(ct);
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(m => m.IsRead, true)
+                .SetProperty(m => m.ReadAt, DateTime.UtcNow), ct);
 
-        if (!unreadMessages.Any())
-            return Result<int>.Success(0); // Nothing to update
-
-        foreach (var msg in unreadMessages)
-        {
-            msg.IsRead = true;
-            msg.ReadAt = DateTime.UtcNow;
-        }
-
-        await _db.SaveChangesAsync(ct);
-        return Result<int>.Success(unreadMessages.Count);
+        return Result<int>.Success((int)affectedRows);
     }
 }
