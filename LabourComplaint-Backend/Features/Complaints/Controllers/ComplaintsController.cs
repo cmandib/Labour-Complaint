@@ -123,4 +123,30 @@ public class ComplaintsController : ControllerBase
             onFailure: error => Problem(detail: error)
         );
     }
+
+    /// <summary>
+    /// Assign an inspector to a submitted complaint. Creates a ChatRoom automatically.
+    /// </summary>
+    [HttpPatch("{referenceNumber}/assign")]
+    [Authorize(Roles = "Admin")] // Change to "InspectorOrAdmin" if needed
+    [ProducesResponseType(typeof(AssignResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<AssignResponseDto>> AssignInspector(
+        [FromRoute] string referenceNumber,
+        [FromBody] AssignInspectorDto dto,
+        CancellationToken ct)
+    {
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier) ?? User.FindFirst("sub");
+        if (userIdClaim is null || !int.TryParse(userIdClaim.Value, out var userId))
+            return Unauthorized();
+
+        var result = await _service.AssignInspectorAsync(referenceNumber, userId, dto, ct);
+
+        return result.Match<ActionResult<AssignResponseDto>>(
+            onSuccess: response => Ok(response),
+            onFailure: error => Problem(detail: error, statusCode: StatusCodes.Status400BadRequest)
+        );
+    }
 }

@@ -1,16 +1,17 @@
 // Program.cs
-using System.Reflection;
-using System.Text; //   Added for Encoding.UTF8
 using FluentValidation;
 using LabourComplaint_Backend.Data;
 using LabourComplaint_Backend.Features.Auth.Services;
 using LabourComplaint_Backend.Features.Auth.Validators;
+using LabourComplaint_Backend.Features.Chat.Services;
 using LabourComplaint_Backend.Features.Complaints.Services;
 using LabourComplaint_Backend.Features.Complaints.Validators;
 using Microsoft.AspNetCore.Authentication.JwtBearer; //   Added explicit namespace
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens; //   Added for SymmetricSecurityKey
 using Microsoft.OpenApi.Models;
+using System.Reflection;
+using System.Text; //   Added for Encoding.UTF8
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -25,6 +26,7 @@ builder.Services.AddValidatorsFromAssemblyContaining<RegisterDtoValidator>(); //
 // Application Services
 builder.Services.AddScoped<IComplaintService, ComplaintService>();
 builder.Services.AddScoped<IAuthService, AuthService>(); //   Added Auth service
+builder.Services.AddScoped<IChatService, ChatService>();
 
 //   JWT Authentication (your existing config - kept as-is)
 // Program.cs - Update the AddJwtBearer block:

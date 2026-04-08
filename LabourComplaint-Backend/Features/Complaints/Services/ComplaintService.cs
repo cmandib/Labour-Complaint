@@ -176,6 +176,106 @@ public class ComplaintService : IComplaintService
         return Result<PaginatedResult<ComplaintSummaryDto>>.Success(paginated);
     }
 
+    public async Task<Result<AssignResponseDto>> AssignInspectorAsync(
+    string referenceNumber, int assigningUserId, AssignInspectorDto dto, CancellationToken ct)
+    {
+        // 1. Find complaint
+        var complaint = await _db.Complaints
+            .Include(c => c.District)
+            .FirstOrDefaultAsync(c => c.ReferenceNumber == referenceNumber && !c.IsDeleted, ct);
+
+        if (complaint is null)
+            return Result<AssignResponseDto>.Failure("Complaint not found");
+
+        if (complaint.Status != ComplaintStatus.Submitted)
+            return Result<AssignResponseDto>.Failure("Only 'Submitted' complaints can be assigned");
+
+        // 2. Verify assigning user is Admin (change policy as needed)
+        var assigner = await _db.Users.FirstOrDefaultAsync(u => u.Id == assigningUserId && !u.IsDeleted, ct);
+        if (assigner?.Role != UserRole.Admin)
+            return Result<AssignResponseDto>.Failure("Only administrators can assign inspectors");
+
+        // 3. Verify inspector
+        var inspector = await _db.Users.FirstOrDefaultAsync(u => u.Id == dto.InspectorId && !u.IsDeleted, ct);
+        if (inspector is null || inspector.Role != UserRole.Inspector || !inspector.IsActive)
+            return Result<AssignResponseDto>.Failure("Invalid or inactive inspector");
+
+        if (inspector.AssignedDistrictId != complaint.DistrictId)
+            return Result<AssignResponseDto>.Failure("Inspector is not assigned to this district");
+
+        // 4. Wrap in transaction for atomicity
+        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+
+        try
+        {
+            // Update complaint
+            complaint.AssignedInspectorId = inspector.Id;
+            complaint.Status = ComplaintStatus.Assigned;
+            complaint.UpdatedAt = DateTime.UtcNow;
+
+            // Create ChatRoom
+            var chatRoom = new ChatRoom
+            {
+                ComplaintId = complaint.Id,
+                CitizenId = complaint.ReporterId,
+                InspectorId = inspector.Id,
+                DistrictId = complaint.DistrictId,
+                Subject = $"Chat for {complaint.ReferenceNumber}",
+                Status = ChatRoomStatus.Open,
+                CreatedAt = DateTime.UtcNow,
+                IsDeleted = false
+            };
+            _db.ChatRooms.Add(chatRoom);
+
+            // Log history
+            _db.ComplaintStatusHistories.Add(new ComplaintStatusHistory
+            {
+                ComplaintId = complaint.Id,
+                OldStatus = ComplaintStatus.Submitted,
+                NewStatus = ComplaintStatus.Assigned,
+                ChangedByUserId = assigningUserId,
+                Reason = dto.Reason ?? "Inspector assigned",
+                IsAutomated = false,
+                ChangedAt = DateTime.UtcNow
+            });
+
+            // Queue outbox event
+            _db.OutboxMessages.Add(new OutboxMessage
+            {
+                EventType = "ComplaintAssigned",
+                PayloadJson = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    ComplaintId = complaint.Id,
+                    ReferenceNumber = complaint.ReferenceNumber,
+                    InspectorId = inspector.Id,
+                    InspectorName = inspector.Username,
+                    ChatRoomId = chatRoom.Id,
+                    DistrictId = complaint.DistrictId
+                }),
+                DistrictId = complaint.DistrictId,
+                CreatedAt = DateTime.UtcNow
+            });
+
+            await _db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+
+            return Result<AssignResponseDto>.Success(new AssignResponseDto
+            {
+                ReferenceNumber = complaint.ReferenceNumber,
+                Status = complaint.Status.ToString(),
+                AssignedInspectorId = inspector.Id,
+                AssignedInspectorName = inspector.Username,
+                ChatRoomId = chatRoom.Id,
+                AssignedAt = DateTime.UtcNow
+            });
+        }
+        catch (Exception)
+        {
+            await transaction.RollbackAsync(ct);
+            throw;
+        }
+    }
+
     // 🔑 FIXED: Add null-conditional operators as safety net
     private async Task<ComplaintResponseDto> BuildComplaintResponseDto(Complaint c, CancellationToken ct)
     {
