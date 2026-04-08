@@ -2,9 +2,11 @@
 using LabourComplaint_Backend.Features.Chat.Dtos;
 using LabourComplaint_Backend.Features.Notifications.Dtos; // Ensure this namespace contains NotificationCreateRequest
 using LabourComplaint_Backend.Features.Notifications.Services;
+using LabourComplaint_Backend.Hubs;
 using LabourComplaint_Backend.Models;
 using LabourComplaint_Backend.Models.Enums;
 using LabourComplaint_Backend.Shared.Results;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace LabourComplaint_Backend.Features.Chat.Services;
@@ -13,11 +15,15 @@ public class ChatService : IChatService
 {
     private readonly ApplicationDbContext _db;
     private readonly INotificationService _notificationService;
+    private readonly IHubContext<ComplaintHub> _hub;
+    private readonly ILogger<ChatService> _logger;
 
-    public ChatService(ApplicationDbContext db, INotificationService notificationService)
+    public ChatService(ApplicationDbContext db, INotificationService notificationService, IHubContext<ComplaintHub> hub, ILogger<ChatService> logger = null)
     {
         _db = db;
         _notificationService = notificationService;
+        _hub = hub;
+        _logger = logger;
     }
 
     public async Task<Result<IEnumerable<ChatMessageDto>>> GetMessagesAsync(
@@ -126,6 +132,27 @@ public class ChatService : IChatService
             // Prepare Notification Data
             var recipientId = senderId == chatRoom.CitizenId ? chatRoom.InspectorId : chatRoom.CitizenId;
             var senderName = senderId == chatRoom.CitizenId ? chatRoom.Citizen.Username : chatRoom.Inspector.Username;
+
+            // Broadcast to SignalR group (fire-and-forget, don't block main flow)
+            var complaintRef = chatRoom.Complaint?.ReferenceNumber;
+            if (!string.IsNullOrWhiteSpace(complaintRef))
+            {
+                // Use _ = to fire-and-forget; wrap in try-catch to avoid breaking main flow
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _hub.Clients.Group($"complaint-{complaintRef}")
+                            .SendAsync("ReceiveMessage", senderName, message.Content, message.CreatedAt);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Log the error but don't throw - notification already succeeded
+                        _logger?.LogWarning(ex, "Failed to broadcast SignalR message for complaint {ComplaintRef}", complaintRef);
+                    }
+                }, ct);
+            }
+
             var preview = dto.Content.Length > 100 ? dto.Content[..100] + "..." : dto.Content;
 
             // Create Notification using the new structure

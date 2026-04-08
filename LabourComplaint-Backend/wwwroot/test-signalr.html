@@ -1,0 +1,384 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>🔌 SignalR Test - LabourComplaint</title>
+    <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@8.0.0/dist/browser/signalr.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 900px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            background: #f9fafb;
+            color: #1f2937;
+        }
+
+        h1 {
+            margin-bottom: 1.5rem;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            margin-bottom: 1.5rem;
+        }
+
+        label {
+            display: block;
+            font-weight: 500;
+            margin: 1rem 0 0.5rem;
+        }
+
+        input, textarea {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-size: 1rem;
+            margin-bottom: 0.5rem;
+        }
+
+            input:focus, textarea:focus {
+                outline: none;
+                border-color: #3b82f6;
+                box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+            }
+
+        button {
+            background: #2563eb;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            margin-right: 0.5rem;
+            transition: background 0.2s;
+        }
+
+            button:hover {
+                background: #1d4ed8;
+            }
+
+            button:disabled {
+                background: #9ca3af;
+                cursor: not-allowed;
+            }
+
+            button.secondary {
+                background: #6b7280;
+            }
+
+                button.secondary:hover {
+                    background: #4b5563;
+                }
+
+            button.danger {
+                background: #dc2626;
+            }
+
+                button.danger:hover {
+                    background: #b91c1c;
+                }
+
+        #log {
+            background: #1f2937;
+            color: #e5e7eb;
+            font-family: monospace;
+            padding: 1rem;
+            border-radius: 8px;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            font-size: 0.9rem;
+        }
+
+        .status {
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+            font-weight: 500;
+        }
+
+            .status.disconnected {
+                background: #fee2e2;
+                color: #991b1b;
+            }
+
+            .status.connecting {
+                background: #fef3c7;
+                color: #92400e;
+            }
+
+            .status.connected {
+                background: #d1fae5;
+                color: #065f46;
+            }
+
+        .message {
+            padding: 0.75rem;
+            border-left: 4px solid #3b82f6;
+            background: #eff6ff;
+            margin: 0.5rem 0;
+            border-radius: 0 8px 8px 0;
+        }
+
+            .message.notification {
+                border-left-color: #f59e0b;
+                background: #fffbeb;
+            }
+
+            .message.system {
+                border-left-color: #6b7280;
+                background: #f9fafb;
+                color: #6b7280;
+            }
+
+        .timestamp {
+            font-size: 0.8rem;
+            color: #6b7280;
+            margin-left: 0.5rem;
+        }
+
+        .flex {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        @media (max-width: 700px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>🔌 SignalR Test Client</h1>
+
+    <div id="status" class="status disconnected">● Disconnected</div>
+
+    <div class="card">
+        <h3>🔐 Connection Settings</h3>
+        <label>JWT Token (from Swagger /login)</label>
+        <input type="password" id="token" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+
+        <label>Complaint Reference</label>
+        <input type="text" id="complaintRef" value="LC-2026-04-FA1B62" placeholder="LC-2026-04-FA1B62">
+
+        <label>Hub URL</label>
+        <input type="text" id="hubUrl" value="https://localhost:7260/hubs/complaint" readonly>
+
+        <div class="flex" style="margin-top:1rem">
+            <button id="btnConnect">▶ Connect</button>
+            <button id="btnDisconnect" class="danger" disabled>■ Disconnect</button>
+            <button id="btnJoin" class="secondary" disabled>🔗 Join Complaint</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>💬 Send Chat Message</h3>
+        <label>Sender Name</label>
+        <input type="text" id="senderName" value="TestUser">
+
+        <label>Message</label>
+        <textarea id="messageContent" rows="2" placeholder="Type a message..."></textarea>
+
+        <div class="flex">
+            <button id="btnSend" class="secondary" disabled>📤 Send Message</button>
+            <button id="btnLeave" class="danger" disabled>🚪 Leave Group</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>📋 Event Log</h3>
+        <div id="log">Waiting for connection...</div>
+        <div class="flex" style="margin-top:1rem">
+            <button id="btnClear" class="secondary">🗑 Clear Log</button>
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const els = {
+            status: document.getElementById('status'),
+            token: document.getElementById('token'),
+            complaintRef: document.getElementById('complaintRef'),
+            hubUrl: document.getElementById('hubUrl'),
+            senderName: document.getElementById('senderName'),
+            messageContent: document.getElementById('messageContent'),
+            btnConnect: document.getElementById('btnConnect'),
+            btnDisconnect: document.getElementById('btnDisconnect'),
+            btnJoin: document.getElementById('btnJoin'),
+            btnSend: document.getElementById('btnSend'),
+            btnLeave: document.getElementById('btnLeave'),
+            btnClear: document.getElementById('btnClear'),
+            log: document.getElementById('log')
+        };
+
+        let connection = null;
+
+        // Helper: Log to UI
+        function log(msg, type = 'system') {
+            const time = new Date().toLocaleTimeString();
+            const line = document.createElement('div');
+            line.className = `message ${type}`;
+            line.innerHTML = `<strong>[${time}]</strong> ${msg}<span class="timestamp">${type}</span>`;
+            els.log.appendChild(line);
+            els.log.scrollTop = els.log.scrollHeight;
+        }
+
+        function updateStatus(state) {
+            els.status.className = `status ${state}`;
+            els.status.textContent = `● ${state.charAt(0).toUpperCase() + state.slice(1)}`;
+
+            const connected = state === 'connected';
+            els.btnConnect.disabled = connected;
+            els.btnDisconnect.disabled = !connected;
+            els.btnJoin.disabled = !connected;
+            els.btnSend.disabled = !connected;
+            els.btnLeave.disabled = !connected;
+            els.token.disabled = connected;
+            els.complaintRef.disabled = connected;
+        }
+
+        // Connect to SignalR Hub
+        async function connect() {
+            const token = els.token.value.trim();
+            const hubUrl = els.hubUrl.value.trim();
+
+            if (!token) { alert('Please enter a JWT token'); return; }
+
+            updateStatus('connecting');
+            log('Connecting to hub...', 'system');
+
+            try {
+                connection = new signalR.HubConnectionBuilder()
+                    .withUrl(hubUrl, {
+                        accessTokenFactory: () => token
+                    })
+                    .withAutomaticReconnect([0, 2000, 5000, 10000, 30000])
+                    .configureLogging(signalR.LogLevel.Information)
+                    .build();
+
+                // Register handlers
+                connection.on('ReceiveMessage', (sender, content, timestamp) => {
+                    const time = new Date(timestamp).toLocaleTimeString();
+                    log(`💬 <strong>${sender}</strong>: ${content} <span class="timestamp">${time}</span>`, 'message');
+                });
+
+                connection.on('ReceiveNotification', (notif) => {
+                    log(`🔔 <strong>${notif.title}</strong>: ${notif.body} <span class="timestamp">${new Date(notif.receivedAt).toLocaleTimeString()}</span>`, 'notification');
+                    // Optional: Browser notification
+                    if ('Notification' in window && Notification.permission === 'granted') {
+                        new Notification(notif.title, { body: notif.body });
+                    }
+                });
+
+                connection.on('UserJoined', (userId, ref) => {
+                    log(`👤 User <strong>${userId}</strong> joined complaint <strong>${ref}</strong>`, 'system');
+                });
+
+                connection.onreconnecting(err => log('🔄 Reconnecting...', 'system'));
+                connection.onreconnected(connId => log(`✅ Reconnected (ID: ${connId})`, 'system'));
+                connection.onclose(err => {
+                    log(`❌ Disconnected${err ? ': ' + err.message : ''}`, 'system');
+                    updateStatus('disconnected');
+                });
+
+                await connection.start();
+                log('✅ Connected to SignalR hub', 'system');
+                updateStatus('connected');
+
+                // Auto-join complaint if ref provided
+                const ref = els.complaintRef.value.trim();
+                if (ref) {
+                    await connection.invoke('JoinComplaint', ref);
+                    log(`🔗 Joined complaint group: <strong>${ref}</strong>`, 'system');
+                }
+            } catch (err) {
+                log(`❌ Connection failed: ${err.message}`, 'system');
+                updateStatus('disconnected');
+                console.error(err);
+            }
+        }
+
+        // Event Listeners
+        els.btnConnect.onclick = connect;
+
+        els.btnDisconnect.onclick = async () => {
+            if (connection) {
+                await connection.stop();
+                log('🛑 Manually disconnected', 'system');
+            }
+        };
+
+        els.btnJoin.onclick = async () => {
+            const ref = els.complaintRef.value.trim();
+            if (!ref) { alert('Enter a complaint reference'); return; }
+            try {
+                await connection.invoke('JoinComplaint', ref);
+                log(`🔗 Joined complaint: <strong>${ref}</strong>`, 'system');
+            } catch (err) {
+                log(`❌ Join failed: ${err.message}`, 'system');
+            }
+        };
+
+        els.btnSend.onclick = async () => {
+            const ref = els.complaintRef.value.trim();
+            const sender = els.senderName.value.trim() || 'Anonymous';
+            const content = els.messageContent.value.trim();
+            if (!content) { alert('Enter a message'); return; }
+
+            try {
+                await connection.invoke('SendChatMessage', ref, sender, content);
+                log(`📤 Sent: "${content}"`, 'system');
+                els.messageContent.value = '';
+            } catch (err) {
+                log(`❌ Send failed: ${err.message}`, 'system');
+            }
+        };
+
+        els.btnLeave.onclick = async () => {
+            const ref = els.complaintRef.value.trim();
+            try {
+                await connection.invoke('LeaveComplaint', ref);
+                log(`🚪 Left complaint group: ${ref}`, 'system');
+            } catch (err) {
+                log(`❌ Leave failed: ${err.message}`, 'system');
+            }
+        };
+
+        els.btnClear.onclick = () => { els.log.innerHTML = 'Log cleared.\n'; };
+
+        // Request browser notification permission
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+
+        // Allow Enter key to send message
+        els.messageContent.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (!els.btnSend.disabled) els.btnSend.click();
+            }
+        });
+
+        log('👋 Ready! Paste your JWT token and click Connect.', 'system');
+    </script>
+</body>
+</html>

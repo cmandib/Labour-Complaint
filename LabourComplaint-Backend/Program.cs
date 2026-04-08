@@ -7,6 +7,7 @@ using LabourComplaint_Backend.Features.Chat.Services;
 using LabourComplaint_Backend.Features.Complaints.Services;
 using LabourComplaint_Backend.Features.Complaints.Validators;
 using LabourComplaint_Backend.Features.Notifications.Services;
+using LabourComplaint_Backend.Hubs;
 using Microsoft.AspNetCore.Authentication.JwtBearer; //   Added explicit namespace
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens; //   Added for SymmetricSecurityKey
@@ -56,6 +57,8 @@ builder.Services.AddAuthentication(options =>
                 ?? throw new InvalidOperationException("JWT SecretKey missing"))),
 
         // Add clock skew tolerance (handles minor server/client time differences)
+        NameClaimType = "sub", // Maps JWT "sub" to User.Identity.Name
+        RoleClaimType = "role",
         ClockSkew = TimeSpan.FromMinutes(5)
     };
 
@@ -87,6 +90,13 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy("InspectorOrAdmin", policy => policy.RequireRole("Inspector", "Admin")) //   Added
     .AddPolicy("DistrictScoped", policy =>
         policy.RequireAssertion(context => true)); // TODO: Implement district logic
+
+builder.Services.AddSignalR(options =>
+{
+    options.EnableDetailedErrors = builder.Environment.IsDevelopment();
+    options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+    options.ClientTimeoutInterval = TimeSpan.FromSeconds(30);
+});
 
 // Controllers + Swagger
 builder.Services.AddControllers();
@@ -143,6 +153,22 @@ builder.Services.AddSwaggerGen(options =>
             .Replace("/", "")
             .ToLowerInvariant());
 });
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowLocalhost", policy =>
+    {
+        policy
+            .WithOrigins(
+                "https://localhost:7260",
+                "http://localhost:5256",
+                "http://127.0.0.1:5256",
+                "file://") // Allow local file:// testing
+            .AllowAnyMethod()
+            .AllowAnyHeader()
+            .AllowCredentials() //  Required for SignalR with auth
+            .SetIsOriginAllowed(_ => true); // Dev-only: allow any origin
+    });
+});
 
 var app = builder.Build();
 
@@ -158,13 +184,16 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseCors("AllowLocalhost");
 app.UseAuthentication(); // Already in correct order
 app.UseMiddleware<LabourComplaint_Backend.Middleware.BlacklistMiddleware>();
 app.UseAuthorization();
 
+app.MapHub<ComplaintHub>("/hubs/complaint");
 app.MapControllers();
 // Map Endpoints
 //app.MapComplaintEndpoints();
+//app.MapHub<ComplaintHub>("/hubs/complaint");
 
 // Health Check
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }))
