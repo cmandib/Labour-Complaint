@@ -58,6 +58,7 @@ public class ApplicationDbContext : DbContext
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<UserDevice> UserDevices => Set<UserDevice>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<BlacklistedToken> BlacklistedTokens => Set<BlacklistedToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -92,6 +93,14 @@ public class ApplicationDbContext : DbContext
             entity.HasIndex(o => new { o.ProcessedAt, o.RetryCount });
             entity.HasIndex(o => new { o.DistrictId, o.EventType }); // Index for district filtering
             entity.Property(o => o.EventType).HasMaxLength(100);
+        });
+        modelBuilder.Entity<BlacklistedToken>(entity =>
+        {
+            entity.HasIndex(t => new { t.TokenIdentifier, t.IsDeleted })
+                  .IsUnique(); // Prevent duplicate blacklisting
+            entity.HasIndex(t => t.ExpiresAt); // Speed up cleanup queries
+            entity.Property(t => t.TokenIdentifier).HasMaxLength(500);
+            entity.Property(t => t.Reason).HasMaxLength(100);
         });
 
         // === RELATIONSHIPS (Normalized FKs, Restrict cascades to prevent cycles) ===

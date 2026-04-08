@@ -43,16 +43,14 @@ public class ComplaintService : IComplaintService
             Severity = (PriorityLevel)dto.Severity,
             ConfidentialityLevel = dto.ConfidentialityLevel,
             Status = ComplaintStatus.Submitted,
-            ResponseDueBy = DateTime.UtcNow.AddHours(24), // SLA: 24h first response
-            ResolutionDueBy = DateTime.UtcNow.AddDays(7)   // SLA: 7 days resolution
+            ResponseDueBy = DateTime.UtcNow.AddHours(24),
+            ResolutionDueBy = DateTime.UtcNow.AddDays(7)
         };
 
         _db.Complaints.Add(complaint);
-
-        // 3. Save to get ID for evidence linking
         await _db.SaveChangesAsync(ct);
 
-        // 4. Process initial evidence (metadata only - actual files handled by storage service)
+        // 3. Process initial evidence
         if (dto.InitialEvidence?.Any() == true)
         {
             var evidenceItems = dto.InitialEvidence.Select(e => new EvidenceItem
@@ -72,18 +70,18 @@ public class ComplaintService : IComplaintService
             await _db.SaveChangesAsync(ct);
         }
 
-        // 5. Log status change in history
+        // 4. Log status change
         _db.ComplaintStatusHistories.Add(new ComplaintStatusHistory
         {
             ComplaintId = complaint.Id,
-            OldStatus = ComplaintStatus.Draft, // Conceptual start
+            OldStatus = ComplaintStatus.Draft,
             NewStatus = ComplaintStatus.Submitted,
             ChangedByUserId = reporterUserId,
             Reason = "Initial submission",
             IsAutomated = false
         });
 
-        // 6. Queue assignment event via outbox
+        // 5. Queue assignment event
         _db.OutboxMessages.Add(new OutboxMessage
         {
             EventType = "ComplaintSubmitted",
@@ -100,8 +98,20 @@ public class ComplaintService : IComplaintService
 
         await _db.SaveChangesAsync(ct);
 
-        // 7. Build response DTO
-        var response = await BuildComplaintResponseDto(complaint, ct);
+        // 🔑 FIXED: Reload complaint with navigation properties before building response
+        var complaintWithRelations = await _db.Complaints
+            .AsNoTracking()
+            .Include(c => c.Reporter)
+            .Include(c => c.District)
+            .Include(c => c.Evidence)
+            .Include(c => c.ChatRoom)
+            .FirstOrDefaultAsync(c => c.Id == complaint.Id && !c.IsDeleted, ct);
+
+        if (complaintWithRelations is null)
+            return Result<ComplaintResponseDto>.Failure("Complaint created but not found");
+
+        // 6. Build response from fully-loaded entity
+        var response = await BuildComplaintResponseDto(complaintWithRelations, ct);
         return Result<ComplaintResponseDto>.Success(response);
     }
 
@@ -118,7 +128,6 @@ public class ComplaintService : IComplaintService
         if (complaint is null)
             return Result<ComplaintResponseDto>.Failure("Complaint not found");
 
-        // Authorization check: can this user view this complaint?
         if (!await CanUserViewComplaintAsync(complaint, requestingUserId, ct))
             return Result<ComplaintResponseDto>.Failure("Access denied");
 
@@ -127,8 +136,8 @@ public class ComplaintService : IComplaintService
     }
 
     public async Task<Result<PaginatedResult<ComplaintSummaryDto>>> ListComplaintsAsync(
-    int? districtId, int? reporterId, string? status,
-    int page = 1, int limit = 20, CancellationToken ct = default)
+        int? districtId, int? reporterId, string? status,
+        int page = 1, int limit = 20, CancellationToken ct = default)
     {
         var query = _db.Complaints
             .AsNoTracking()
@@ -144,7 +153,6 @@ public class ComplaintService : IComplaintService
             query = query.Where(c => c.Status == parsedStatus);
         }
 
-        // Get total count BEFORE pagination
         var totalCount = await query.CountAsync(ct);
 
         var summaries = await query
@@ -164,11 +172,11 @@ public class ComplaintService : IComplaintService
             .Take(limit)
             .ToListAsync(ct);
 
-        // Return wrapped result with pagination metadata
         var paginated = new PaginatedResult<ComplaintSummaryDto>(summaries, totalCount, page, limit);
         return Result<PaginatedResult<ComplaintSummaryDto>>.Success(paginated);
     }
-    // Helper: Build response DTO from entity
+
+    // 🔑 FIXED: Add null-conditional operators as safety net
     private async Task<ComplaintResponseDto> BuildComplaintResponseDto(Complaint c, CancellationToken ct)
     {
         var evidenceCount = await _db.EvidenceItems
@@ -185,9 +193,12 @@ public class ComplaintService : IComplaintService
             Status = c.Status,
             Severity = c.Severity,
             ConfidentialityLevel = c.ConfidentialityLevel,
-            ReporterUsername = c.Reporter.Username,
+
+            // 🔑 Safe navigation with fallbacks
+            ReporterUsername = c.Reporter?.Username ?? "Unknown",
             DistrictId = c.DistrictId,
-            DistrictName = c.District.Name,
+            DistrictName = c.District?.Name ?? "Unknown District",
+
             CreatedAt = c.CreatedAt,
             ResponseDueBy = c.ResponseDueBy,
             ResolutionDueBy = c.ResolutionDueBy,
@@ -196,22 +207,15 @@ public class ComplaintService : IComplaintService
         };
     }
 
-    // Helper: Authorization logic
     private async Task<bool> CanUserViewComplaintAsync(Complaint complaint, int userId, CancellationToken ct)
     {
         var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId && !u.IsDeleted, ct);
         if (user is null) return false;
 
-        // Admins can view all
         if (user.Role == UserRole.Admin) return true;
-
-        // Reporter can view their own
         if (complaint.ReporterId == userId) return true;
-
-        // Assigned inspector can view
         if (complaint.AssignedInspectorId == userId) return true;
 
-        // Inspector in same district can view non-confidential complaints
         if (user.Role == UserRole.Inspector &&
             user.AssignedDistrictId == complaint.DistrictId &&
             complaint.ConfidentialityLevel <= 2)
@@ -222,7 +226,6 @@ public class ComplaintService : IComplaintService
         return false;
     }
 
-    // Helper: Determine evidence type from MIME
     private EvidenceType DetermineEvidenceType(string mimeType)
     {
         return mimeType switch
