@@ -23,6 +23,9 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 // FluentValidation - include Auth validators too  
 builder.Services.AddValidatorsFromAssemblyContaining<ComplaintCreateDtoValidator>();
 builder.Services.AddValidatorsFromAssemblyContaining<RegisterDtoValidator>(); //   Added
+builder.Services.AddHostedService<SLAMonitorService>();
+
+builder.Services.Configure<SLAMonitorOptions>(builder.Configuration.GetSection("SLAMonitor"));
 
 // Application Services
 builder.Services.AddScoped<IComplaintService, ComplaintService>();

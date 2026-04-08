@@ -11,8 +11,8 @@ public class ComplaintStatusHistory
     [Required] public ComplaintStatus OldStatus { get; set; }
     [Required] public ComplaintStatus NewStatus { get; set; }
 
-    [Required] public int ChangedByUserId { get; set; }
-    public User ChangedByUser { get; set; } = null!;
+    [Required] public int? ChangedByUserId { get; set; }
+    public User? ChangedByUser { get; set; } = null!;
 
     [Required] public DateTime ChangedAt { get; set; } = DateTime.UtcNow;
     [StringLength(500)] public string? Reason { get; set; }
